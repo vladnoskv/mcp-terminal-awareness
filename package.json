@@ -26,7 +26,10 @@
     "test:ci": "npm run test:coverage",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
-    "format": "prettier --write \"**/*.{ts,js,json,md}\""
+    "format": "prettier --write \"**/*.{ts,js,json,md}\"",
+    "inspector": "npx @modelcontextprotocol/inspector@0.16.4 node dist/bin/cli.js",
+    "inspector:build": "npm run build && npm run inspector",
+    "inspector:quick": "node inspector.js"
   },
   "repository": {
     "type": "git",
@@ -46,6 +49,7 @@
     "access": "public"
   },
   "devDependencies": {
+    "@modelcontextprotocol/inspector": "^0.16.4",
     "@types/chai": "^5.2.2",
     "@types/jest": "^29.5.12",
     "@types/mocha": "^10.0.10",

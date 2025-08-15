@@ -45,11 +45,7 @@ An MCP (Model Control Protocol) server that enhances terminal command execution 
 
 2. Install dependencies:
    ```bash
-   # Install dev dependencies (TypeScript, type definitions)
-   npm install --save-dev typescript @types/node
-
-   # Optional: Install node-pty for PTY support (recommended for better terminal emulation)
-   npm install node-pty
+   npm install
    ```
 
 3. Build the project:
@@ -78,6 +74,27 @@ $env:USE_PTY = "1"
 # Run the server
 node dist/bin/cli.js
 ```
+
+### Testing with MCP Inspector
+
+The package includes comprehensive testing support with MCP Inspector v0.16.4:
+
+```bash
+# Quick test with inspector (recommended)
+npm run inspector:quick
+
+# Build and test with inspector
+npm run inspector:build
+
+# Manual inspector testing
+npx @modelcontextprotocol/inspector@0.16.4 node dist/bin/cli.js
+```
+
+Once the inspector opens in your browser (http://localhost:6274), you can:
+- Test the `run_command` tool with various commands
+- Monitor real-time command execution
+- Test different shell environments
+- Debug connection issues
 
 ### Basic Client Example
 
@@ -322,14 +339,63 @@ DEBUG=mcp:* node dist/bin/cli.js
 
 ### Running Tests
 
+The project includes comprehensive testing capabilities:
+
+#### Automated Testing
 ```bash
 # Run all tests
 npm test
 
-# Run tests with coverage
-npm run test:coverage
+# Unit tests only
+npm run test:unit
 
-# Run a specific test file
+# Integration tests only
+npm run test:integration
+
+# Coverage reports
+npm run test:coverage
+```
+
+#### MCP Inspector Testing
+```bash
+# Quick inspector testing (recommended)
+npm run inspector:quick
+
+# Build and test with inspector
+npm run inspector:build
+
+# Manual inspector testing
+npm run inspector
+```
+
+#### Linting & Formatting
+```bash
+# Check code quality
+npm run lint
+
+# Auto-fix linting issues
+npm run lint:fix
+
+# Format code
+npm run format
+```
+
+### Available Scripts
+- `npm run build` - Build the TypeScript project
+- `npm run dev` - Build and watch for changes
+- `npm test` - Run all tests
+- `npm run test:unit` - Run unit tests only
+- `npm run test:integration` - Run integration tests only
+- `npm run test:coverage` - Run tests with coverage
+- `npm run inspector` - Start MCP Inspector v0.16.4
+- `npm run inspector:quick` - Quick inspector testing
+- `npm run inspector:build` - Build and test with inspector
+- `npm run lint` - Run ESLint
+- `npm run lint:fix` - Fix ESLint issues automatically
+- `npm run format` - Format code with Prettier
+
+### Running a Specific Test File
+```bash
 npx jest path/to/test/file.test.ts
 ```
 
@@ -340,16 +406,105 @@ This project uses:
 - ESLint with TypeScript support
 - Prettier for code formatting
 
+## Current Status & Improvements
+
+### ✅ **Working Features**
+- **MCP Inspector Integration**: Full testing support with v0.16.4
+- **Command Execution**: `run_command` tool with intelligent completion detection
+- **Cross-Platform Support**: Windows, macOS, and Linux compatibility
+- **Multiple Shell Support**: Bash, PowerShell, CMD, and custom shells
+- **Real-time Monitoring**: Progress tracking and status updates
+- **Session Management**: Multiple concurrent terminal sessions
+- **Comprehensive Testing**: Unit, integration, and MCP Inspector testing
+
+### 🔧 **Testing & Development**
+- **MCP Inspector v0.16.4**: Fully integrated with custom scripts
+- **Automated Testing**: Jest unit tests and integration tests
+- **Code Quality**: ESLint + Prettier configuration
+- **Build Pipeline**: TypeScript compilation and bundling
+
+### 📋 **Areas for Improvement**
+
+#### **Enhanced Documentation**
+- Add more detailed usage examples for complex scenarios
+- Create video tutorials for MCP Inspector usage
+- Document advanced configuration patterns
+
+#### **Feature Enhancements**
+- **Interactive Shell Support**: Add support for interactive REPL environments
+- **Command History**: Persistent command history across sessions
+- **Output Streaming**: Real-time streaming of command output
+- **Error Handling**: More granular error types and recovery strategies
+- **Performance Monitoring**: Resource usage tracking for long-running commands
+
+#### **Testing Improvements**
+- **Cross-Platform CI/CD**: GitHub Actions for Windows, macOS, and Linux
+- **Performance Benchmarks**: Command execution timing and resource usage
+- **Security Testing**: Input validation and command injection prevention
+- **Integration Tests**: More comprehensive MCP client integration tests
+
+#### **Developer Experience**
+- **Configuration Templates**: Pre-configured setups for common use cases
+- **Debugging Tools**: Enhanced logging and debugging capabilities
+- **Plugin Architecture**: Extensible system for custom command handlers
+
+### 🚀 **Getting Started with Improvements**
+
+To contribute to any of these improvements:
+
+1. **Fork the repository**
+2. **Run the test suite**: `npm run inspector:quick` to understand current functionality
+3. **Check existing tests**: Review `src/**/*.test.ts` files
+4. **Follow the development guide**: Use `npm run dev` for live development
+
+## Troubleshooting
+
+### Common Issues
+
+#### **"Disconnected" Status in MCP Inspector**
+The MCP Inspector v0.16.4 doesn't display an explicit "Connected" message. Instead, look for:
+- **Server Status**: Check the terminal for "New STDIO connection request" messages
+- **Available Tools**: The `run_command` tool should appear in the inspector interface
+- **Request/Response Logs**: Monitor the terminal for active communication
+
+#### **Port 6277 Already in Use**
+If you encounter port conflicts:
 ```bash
-# Format code
-npm run format
+# Find process using port 6277 (Windows)
+netstat -ano | findstr :6277
+tasklist /FI "PID eq [PID_NUMBER]"
 
-# Lint code
-npm run lint
+# Kill the process (Windows)
+taskkill /PID [PID_NUMBER] /F
 
-# Fix linting issues
-npm run lint:fix
+# Alternative: Use different port
+npx @modelcontextprotocol/inspector@0.16.4 --port 6278 node dist/bin/cli.js
 ```
+
+#### **Build Issues**
+```bash
+# Clean build
+npm run build
+npm run typecheck
+
+# Verify dependencies
+npm install
+npm audit fix
+```
+
+#### **Testing Issues**
+```bash
+# Quick test without inspector
+node dist/bin/cli.js
+
+# Test with simple command
+echo "Hello, World!"
+```
+
+### Getting Help
+- **Check Issues**: Review GitHub issues for known problems
+- **Debug Mode**: Set `LOG_LEVEL=debug` for detailed logging
+- **Community**: Join MCP community discussions for support
 
 ## License
 
