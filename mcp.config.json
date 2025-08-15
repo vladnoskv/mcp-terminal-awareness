@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "terminal-awareness": {
+      "command": "node",
+      "args": [
+        "dist/bin/cli.js"
+      ]
+    }
+  },
+  "defaultServer": "terminal-awareness",
+  "serverOptions": {
+    "port": 3000,
+    "logLevel": "info",
+    "maxOutputLength": 1048576
+  }
+}
