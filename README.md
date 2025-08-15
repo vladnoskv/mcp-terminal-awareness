@@ -39,7 +39,7 @@ An MCP (Model Control Protocol) server that enhances terminal command execution 
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/mcp-terminal-awareness.git
+   git clone https://github.com/vladnoskv/mcp-terminal-awareness.git
    cd mcp-terminal-awareness
    ```
 

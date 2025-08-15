@@ -367,4 +367,4 @@ Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTIN
 
 ---
 
-*This project is maintained by [Your Name]. Report issues [here](https://github.com/your-username/mcp-terminal-awareness/issues).*
+*This project is maintained by [Your Name]. Report issues [here](https://github.com/vladnoskv/mcp-terminal-awareness/issues).*
