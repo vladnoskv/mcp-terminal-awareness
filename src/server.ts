@@ -3,6 +3,7 @@ import { TerminalAwareness } from './terminal/terminalAwareness.js';
 import type { ServerStartOptions } from './types.js';
 import { SessionStore, wireHeuristics, type Session } from "./sessions.js";
 import { runCommand, type Spawned } from "./adapters/childprocess.js";
+import { getMemoryTools, recordCommandExecution } from './memory/memoryTools.js';
 
 /**
  * Unified process adapter interface that works with both PTY and child processes
@@ -248,7 +249,8 @@ export async function startServer(options: ServerStartOptions = {}, onReady?: ()
     createWriteTool(),
     createSignalTool(),
     createListTool(),
-    createAttachTool()
+    createAttachTool(),
+    ...getMemoryTools()
   ];
 
   try {
@@ -385,6 +387,8 @@ function createRunTool(): ToolDef {
       };
 
       try {
+        const startTime = Date.now();
+        
         // Start the process
         const proc = await maybeRunPTY(command, cwd, shell, env);
         session.adapter = proc;
@@ -439,6 +443,24 @@ function createRunTool(): ToolDef {
             session.exitCode = code;
             session.exitSignal = signal;
             
+            // Record command execution in memory
+             const duration = Date.now() - startTime;
+             try {
+               recordCommandExecution(
+                 command,
+                 code || 0,
+                 duration,
+                 session.buf.join(''),
+                 '', // stderr is mixed in buf for now
+                 cwd,
+                 shell
+               ).catch(error => {
+                 console.error('Failed to record command execution:', error);
+               });
+             } catch (error) {
+               console.error('Failed to record command execution:', error);
+             }
+            
             // Clean up resources
             cleanup();
             
@@ -465,6 +487,24 @@ function createRunTool(): ToolDef {
             session.status = isError ? 'error' : 'completed';
             session.exitCode = code;
             session.exitSignal = signal;
+            
+            // Record command execution in memory
+             const duration = Date.now() - startTime;
+             try {
+               recordCommandExecution(
+                 command,
+                 code || 0,
+                 duration,
+                 session.buf.join(''),
+                 '', // stderr is mixed in buf for now
+                 cwd,
+                 shell
+               ).catch(error => {
+                 console.error('Failed to record command execution:', error);
+               });
+             } catch (error) {
+               console.error('Failed to record command execution:', error);
+             }
             
             if (isError) {
               session.errorReason = `Process exited with code ${code}${signal ? `, signal: ${signal}` : ''}`;

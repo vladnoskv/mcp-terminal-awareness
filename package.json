@@ -29,7 +29,11 @@
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "inspector": "npx @modelcontextprotocol/inspector@0.16.4 node dist/bin/cli.js",
     "inspector:build": "npm run build && npm run inspector",
-    "inspector:quick": "node inspector.js"
+    "inspector:quick": "node inspector.js",
+    "memory:init": "node scripts/init-memory.js",
+    "memory:test": "node test/memory.test.ts",
+    "memory:rebuild": "node -e \"import('./dist/memory/commandHistory.js').then(m => new m.CommandHistory()).then(h => h.rebuildIndexes())\"",
+    "memory:stats": "node -e \"import('./dist/memory/commandHistory.js').then(m => new m.CommandHistory()).then(h => h.getMemoryStats()).then(console.log)\""
   },
   "repository": {
     "type": "git",

@@ -1,0 +1,29 @@
+{
+  "memory": {
+    "dataDirectory": "./memory/data",
+    "maxEntries": 10000,
+    "cleanupThreshold": 0.8,
+    "indexRebuildInterval": 3600000,
+    "compressionEnabled": true,
+    "encryptionEnabled": false
+  },
+  "security": {
+    "safeRoot": ".",
+    "allowedDirectories": ["./memory", "./src", "./test"],
+    "maxFileSize": 10485760,
+    "maxCommandLength": 8192
+  },
+  "performance": {
+    "maxMemoryUsage": 536870912,
+    "cacheSize": 1000,
+    "batchSize": 100,
+    "indexBatchSize": 500
+  },
+  "features": {
+    "autoJournaling": true,
+    "errorAnalysis": true,
+    "performanceTracking": true,
+    "patternRecognition": true,
+    "predictiveSuggestions": true
+  }
+}

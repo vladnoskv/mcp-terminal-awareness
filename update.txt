@@ -1,0 +1,445 @@
+/*
+MCP File+Memory Server — Default Template (TypeScript)
+=====================================================
+
+Purpose
+-------
+A batteries-included MCP server that gives AI agents safe, capable tools to:
+- Read and edit files (with path sandboxing)
+- Search and navigate code (now with **glob** filtering)
+- Keep durable “memories” about what was found or changed (JSONL store)
+- Auto-journal all edits with diffs + tags for later recall
+- **Indexed memory** for fast lookups by `kind`, `tag`, and `subject` (with rebuild tool)
+
+Zero external deps — uses only Node's stdlib.
+
+How to run
+----------
+1) Ensure Node.js >= 18.
+2) Save this file as `mcp-file-memory-server.ts`.
+3) Compile or run with ts-node: `ts-node mcp-file-memory-server.ts`.
+   (Or transpile: `tsc mcp-file-memory-server.ts && node mcp-file-memory-server.js`)
+4) Point your MCP-enabled client at the command `node` with arg `mcp-file-memory-server.js`
+   (see client config example at bottom).
+
+Security notes
+--------------
+- All file operations are sandboxed to a single root directory (default: process.cwd()).
+- Paths are normalized and validated; attempts to escape the sandbox are rejected.
+- Write ops support safe strategies and create automatic change-memories.
+
+———————————————————————————————————————————————————————————————————————————*/
+
+import { createServer, Tool, ToolInputSchema, JSONValue } from "@modelcontextprotocol/sdk/server";
+import * as fs from "fs";
+import * as fsp from "fs/promises";
+import * as path from "path";
+import * as crypto from "crypto";
+
+// =========================
+// Configuration
+// =========================
+const SAFE_ROOT = path.resolve(process.env.MCP_SAFE_ROOT ?? process.cwd());
+const MEMORY_DIR = path.join(SAFE_ROOT, ".mcp_memory");
+const MEMORY_LOG = path.join(MEMORY_DIR, "memories.jsonl");
+const CHANGE_LOG = path.join(MEMORY_DIR, "changes.jsonl");
+
+// Memory indices (no external deps)
+// - META: id -> {offset,len,kind,subject,tags,when}
+// - KIND: kind -> Set<id>
+// - TAG: tag -> Set<id>
+// - SUBJECT: subject -> Set<id>
+const META_INDEX = path.join(MEMORY_DIR, "memory.meta.index.json");
+const KIND_INDEX = path.join(MEMORY_DIR, "memory.kind.index.json");
+const TAG_INDEX = path.join(MEMORY_DIR, "memory.tag.index.json");
+const SUBJECT_INDEX = path.join(MEMORY_DIR, "memory.subject.index.json");
+
+type MetaRow = { offset: number; len: number; kind: Memory["kind"]; subject?: string; tags?: string[]; when: string };
+
+// ensure memory dir exists
+fs.mkdirSync(MEMORY_DIR, { recursive: true });
+if (!fs.existsSync(MEMORY_LOG)) fs.writeFileSync(MEMORY_LOG, "");
+if (!fs.existsSync(CHANGE_LOG)) fs.writeFileSync(CHANGE_LOG, "");
+if (!fs.existsSync(META_INDEX)) fs.writeFileSync(META_INDEX, "{}\n");
+if (!fs.existsSync(KIND_INDEX)) fs.writeFileSync(KIND_INDEX, "{}\n");
+if (!fs.existsSync(TAG_INDEX)) fs.writeFileSync(TAG_INDEX, "{}\n");
+if (!fs.existsSync(SUBJECT_INDEX)) fs.writeFileSync(SUBJECT_INDEX, "{}\n");
+
+// =========================
+// Helpers
+// =========================
+function withinSandbox(p: string) {
+  const abs = path.resolve(SAFE_ROOT, p);
+  if (!abs.startsWith(SAFE_ROOT)) {
+    throw new Error(`Path escapes sandbox: ${p}`);
+  }
+  return abs;
+}
+
+function sha256(input: string) {
+  return crypto.createHash("sha256").update(input).digest("hex");
+}
+
+async function readText(absPath: string, encoding: BufferEncoding = "utf8") {
+  return await fsp.readFile(absPath, { encoding });
+}
+
+async function writeText(absPath: string, content: string, encoding: BufferEncoding = "utf8") {
+  await fsp.mkdir(path.dirname(absPath), { recursive: true });
+  await fsp.writeFile(absPath, content, { encoding });
+}
+
+async function fileExists(absPath: string) {
+  try { await fsp.access(absPath); return true; } catch { return false; }
+}
+
+function timestamp() { return new Date().toISOString(); }
+
+// Minimal line diff (no deps). Returns {added:number, removed:number, beforeHash, afterHash}
+function quickDiff(before: string, after: string) {
+  const b = before.split(/\r?\n/);
+  const a = after.split(/\r?\n/);
+  let added = 0, removed = 0;
+  const setB = new Set(b);
+  const setA = new Set(a);
+  for (const line of a) if (!setB.has(line)) added++;
+  for (const line of b) if (!setA.has(line)) removed++;
+  return { added, removed, beforeHash: sha256(before), afterHash: sha256(after) };
+}
+
+async function appendJSONL(file: string, obj: any) {
+  const s = JSON.stringify(obj) + "\n";
+  const fh = await fsp.open(file, "a");
+  const stat = await fh.stat();
+  const offset = stat.size;
+  await fh.write(s);
+  await fh.close();
+  return { offset, len: Buffer.byteLength(s) };
+}
+
+async function readIndex<T = any>(file: string): Promise<Record<string, T>> {
+  try { return JSON.parse(await readText(file)) as Record<string, T>; } catch { return {}; }
+}
+async function writeIndex(file: string, data: any) {
+  await writeText(file, JSON.stringify(data, null, 2));
+}
+
+// Simple glob -> RegExp converter (supports **, *, ?)
+function globToRegExp(glob: string): RegExp {
+  // normalize to forward slashes for matching
+  const esc = (s: string) => s.replace(/[.+^${}()|\[\]\\]/g, "\\$&");
+  let re = "";
+  let i = 0;
+  const g = glob.replace(/\\/g, "/");
+  while (i < g.length) {
+    if (g[i] === "*") {
+      if (g[i + 1] === "*") { re += ".*"; i += 2; continue; } // **
+      re += "[^/]*"; i++; // *
+    } else if (g[i] === "?") {
+      re += "."; i++;
+    } else {
+      re += esc(g[i]); i++;
+    }
+  }
+  return new RegExp("^" + re + "$", "i");
+}
+
+function matchGlob(relPath: string, glob?: string) {
+  if (!glob) return true;
+  const norm = relPath.replace(/\\/g, "/");
+  const rx = globToRegExp(glob);
+  return rx.test(norm);
+}
+
+// Memory primitives
+type Memory = {
+  id: string;
+  when: string; // ISO
+  kind: "observation" | "decision" | "change" | "note";
+  scope: "file" | "project" | "task";
+  subject?: string; // e.g., file path or task id
+  tags?: string[];
+  data: Record<string, JSONValue>;
+};
+
+async function indexMemoryAppend(id: string, meta: MetaRow) {
+  const metaIdx = await readIndex<MetaRow>(META_INDEX);
+  metaIdx[id] = meta;
+  await writeIndex(META_INDEX, metaIdx);
+
+  const kindIdx = await readIndex<Record<string, boolean>>(KIND_INDEX);
+  const tagIdx = await readIndex<Record<string, Record<string, boolean>>>(TAG_INDEX);
+  const subjIdx = await readIndex<Record<string, Record<string, boolean>>>(SUBJECT_INDEX);
+
+  // kind
+  kindIdx[meta.kind] = kindIdx[meta.kind] || {};
+  (kindIdx[meta.kind] as any)[id] = true;
+
+  // tags
+  for (const t of meta.tags ?? []) {
+    tagIdx[t] = tagIdx[t] || {};
+    tagIdx[t][id] = true;
+  }
+
+  // subject
+  if (meta.subject) {
+    subjIdx[meta.subject] = subjIdx[meta.subject] || {};
+    subjIdx[meta.subject][id] = true;
+  }
+
+  await writeIndex(KIND_INDEX, kindIdx);
+  await writeIndex(TAG_INDEX, tagIdx);
+  await writeIndex(SUBJECT_INDEX, subjIdx);
+}
+
+async function rebuildMemoryIndex() {
+  const metaIdx: Record<string, MetaRow> = {};
+  const kindIdx: Record<string, Record<string, boolean>> = {};
+  const tagIdx: Record<string, Record<string, boolean>> = {};
+  const subjIdx: Record<string, Record<string, boolean>> = {};
+
+  const fh = await fsp.open(MEMORY_LOG, "r");
+  let pos = 0;
+  try {
+    const rs = fh.createReadStream({ encoding: "utf8" });
+    let buf = "";
+    for await (const chunk of rs) {
+      buf += chunk as string;
+      let idx: number;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        const len = Buffer.byteLength(line + "\n");
+        if (!line.trim()) { pos += len; continue; }
+        try {
+          const m = JSON.parse(line) as Memory;
+          const id = m.id;
+          const meta: MetaRow = { offset: pos, len, kind: m.kind, subject: m.subject, tags: m.tags, when: m.when };
+          metaIdx[id] = meta;
+          // kind
+          (kindIdx[m.kind] ||= {})[id] = true;
+          // tags
+          for (const t of m.tags ?? []) (tagIdx[t] ||= {})[id] = true;
+          // subject
+          if (m.subject) (subjIdx[m.subject] ||= {})[id] = true;
+        } catch {}
+        pos += len;
+      }
+    }
+  } finally {
+    await fh.close();
+  }
+
+  await writeIndex(META_INDEX, metaIdx);
+  await writeIndex(KIND_INDEX, kindIdx);
+  await writeIndex(TAG_INDEX, tagIdx);
+  await writeIndex(SUBJECT_INDEX, subjIdx);
+}
+
+async function fetchMemoryById(id: string): Promise<Memory | null> {
+  const metaIdx = await readIndex<MetaRow>(META_INDEX);
+  const m = metaIdx[id];
+  if (!m) return null;
+  const fh = await fsp.open(MEMORY_LOG, "r");
+  try {
+    const buf = Buffer.alloc(m.len);
+    await fh.read(buf, 0, m.len, m.offset);
+    const line = buf.toString("utf8");
+    return JSON.parse(line) as Memory;
+  } finally {
+    await fh.close();
+  }
+}
+
+async function createMemory(m: Memory) {
+  const { offset, len } = await appendJSONL(MEMORY_LOG, m);
+  await indexMemoryAppend(m.id, { offset, len, kind: m.kind, subject: m.subject, tags: m.tags, when: m.when });
+  return m.id;
+}
+
+// naive recall: if query absent, use index filters; if query present, fallback scan
+async function recallMemories({ query, kind, tag, subject, limit = 20 }: { query?: string; kind?: Memory["kind"]; tag?: string; subject?: string; limit?: number; }) {
+  if (!query) {
+    // gather candidate ids from indices
+    const kindIdx = await readIndex<Record<string, boolean>>(KIND_INDEX);
+    const tagIdx = await readIndex<Record<string, Record<string, boolean>>>(TAG_INDEX);
+    const subjIdx = await readIndex<Record<string, Record<string, boolean>>>(SUBJECT_INDEX);
+
+    let candidate: Record<string, boolean> | null = null;
+    const mergeAnd = (a: Record<string, boolean> | null, b: Record<string, boolean> | undefined) => {
+      if (!b) return a;
+      if (!a) return { ...b };
+      const out: Record<string, boolean> = {};
+      for (const id of Object.keys(a)) if (b[id]) out[id] = true;
+      return out;
+    };
+
+    if (kind) candidate = mergeAnd(candidate, kindIdx[kind]);
+    if (tag) candidate = mergeAnd(candidate, tagIdx[tag]);
+    if (subject) candidate = mergeAnd(candidate, subjIdx[subject]);
+
+    const ids = candidate ? Object.keys(candidate) : [];
+    // fetch newest first using META when
+    const meta = await readIndex<MetaRow>(META_INDEX);
+    ids.sort((a, b) => (meta[b]?.when || "").localeCompare(meta[a]?.when || ""));
+
+    const rows: Memory[] = [];
+    for (const id of ids.slice(0, limit)) {
+      const m = await fetchMemoryById(id);
+      if (m) rows.push(m);
+    }
+    return rows;
+  }
+
+  // fallback: scan JSONL for substring
+  const txt = await readText(MEMORY_LOG);
+  const lines = txt.split(/\n/).filter(Boolean);
+  const results: Memory[] = [];
+  for (const line of lines.reverse()) {
+    try {
+      const m = JSON.parse(line) as Memory;
+      let ok = true;
+      if (kind && m.kind !== kind) ok = false;
+      if (tag && !(m.tags?.includes(tag))) ok = false;
+      if (subject && m.subject !== subject) ok = false;
+      if (query) {
+        const hay = JSON.stringify(m).toLowerCase();
+        if (!hay.includes(query.toLowerCase())) ok = false;
+      }
+      if (ok) results.push(m);
+      if (results.length >= limit) break;
+    } catch {}
+  }
+  return results;
+}
+
+// change journal helper
+async function journalChange(entry: any) {
+  await appendJSONL(CHANGE_LOG, entry);
+}
+
+// =========================
+// Tools
+// =========================
+
+const tools: Tool[] = [];
+
+// list_dir with optional glob and recursion
+{
+  const input: ToolInputSchema = {
+    type: "object",
+    properties: {
+      dir: { type: "string", description: "Directory path, relative to SAFE_ROOT" },
+      recursive: { type: "boolean", default: false },
+      glob: { type: "string", description: "Optional glob filter, e.g. **/*.ts" },
+      maxEntries: { type: "number", minimum: 1, maximum: 10000, default: 500 },
+      includeHidden: { type: "boolean", default: false }
+    },
+    required: ["dir"]
+  };
+  async function walk(absDir: string, out: string[], includeHidden: boolean, max: number) {
+    const items = await fsp.readdir(absDir, { withFileTypes: true });
+    for (const it of items) {
+      if (out.length >= max) break;
+      if (!includeHidden && it.name.startsWith(".")) continue;
+      const abs = path.join(absDir, it.name);
+      if (it.isDirectory()) await walk(abs, out, includeHidden, max);
+      else out.push(abs);
+    }
+  }
+  tools.push({
+    name: "list_dir",
+    description: "List entries in a directory (optionally recursive) with glob filtering.",
+    inputSchema: input,
+    handler: async (args) => {
+      const abs = withinSandbox(args.dir as string);
+      const includeHidden = Boolean(args.includeHidden);
+      const maxEntries = (args.maxEntries as number) ?? 500;
+      const recursive = Boolean(args.recursive);
+      const glob = args.glob as string | undefined;
+
+      if (!recursive) {
+        const names = await fsp.readdir(abs, { withFileTypes: true });
+        const filtered = (includeHidden ? names : names.filter(n => !n.name.startsWith(".")));
+        const rows = filtered.map(d => ({
+          name: d.name,
+          kind: d.isDirectory() ? "dir" : "file"
+        }));
+        return glob ? rows.filter(r => r.kind === "dir" || matchGlob(path.join(args.dir as string, r.name), glob)).slice(0, maxEntries) : rows.slice(0, maxEntries);
+      }
+
+      // recursive: return files only (common agent need)
+      const all: string[] = [];
+      await walk(abs, all, includeHidden, maxEntries * 5);
+      const rels = all.map(a => path.relative(SAFE_ROOT, a));
+      const out = (glob ? rels.filter(r => matchGlob(r, glob)) : rels).slice(0, maxEntries).map(r => ({ name: r, kind: "file" as const }));
+      return out;
+    }
+  });
+}
+
+// read_file
+{
+  const input: ToolInputSchema = {
+    type: "object",
+    properties: {
+      path: { type: "string" },
+      encoding: { type: "string", enum: ["utf8", "utf16le", "ascii"], default: "utf8" },
+      maxBytes: { type: "number", default: 1024 * 1024 }
+    },
+    required: ["path"]
+  };
+  tools.push({
+    name: "read_file",
+    description: "Read a text file inside the sandbox.",
+    inputSchema: input,
+    handler: async (args) => {
+      const abs = withinSandbox(args.path as string);
+      const stat = await fsp.stat(abs);
+      if (stat.size > (args.maxBytes as number)) {
+        throw new Error(`File too large: ${stat.size} > ${args.maxBytes}`);
+      }
+      const content = await readText(abs, (args.encoding as BufferEncoding) ?? "utf8");
+      await createMemory({
+        id: sha256(`observation:${abs}:${timestamp()}`),
+        when: timestamp(),
+        kind: "observation",
+        scope: "file",
+        subject: path.relative(SAFE_ROOT, abs),
+        tags: ["read"],
+        data: { bytes: stat.size, sample: content.slice(0, 400) }
+      });
+      return { content };
+    }
+  });
+}
+
+// search_in_files (simple text search) with glob
+{
+  const input: ToolInputSchema = {
+    type: "object",
+    properties: {
+      dir: { type: "string", default: "." },
+      query: { type: "string", description: "Case-insensitive substring to find" },
+      glob: { type: "string", description: "Limit files using a glob like **/*.{ts,tsx,js}" },
+      maxFiles: { type: "number", default: 300 },
+      maxBytes: { type: "number", default: 256 * 1024 }
+    },
+    required: ["query"]
+  };
+  async function walk(absDir: string, out: string[], includeHidden = false, limit = 1000) {
+    const items = await fsp.readdir(absDir, { withFileTypes: true });
+    for (const it of items) {
+      if (out.length >= limit) break;
+      if (!includeHidden && it.name.startsWith(".")) continue;
+      const abs = path.join(absDir, it.name);
+      if (it.isDirectory()) await walk(abs, out, includeHidden, limit);
+      else out.push(abs);
+    }
+  }
+  tools.push({
+    name: "search_in_files",
+    description: "Search for a substring across files under a directory, with glob filtering.",
+    inputSchema: input,
+    handler: async (args) => {
+      const root = withinSandbox(ar
